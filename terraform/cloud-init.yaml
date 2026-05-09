@@ -1,0 +1,10 @@
+#cloud-config
+# Multipass instance'larının başlangıç yapılandırmasını ve SSH anahtarlarını tanımlayan cloud-init dosyası.
+users:
+  - default
+  - name: ubuntu
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      # ssh-ed kısmınıda eklememiz lazım
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA2PaeXoo2vFT/S0nIhBJRw+V6gGoXeKu/hWXdN5I9iO

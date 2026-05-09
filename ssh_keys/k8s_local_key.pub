@@ -1,0 +1,2 @@
+# K8s cluster düğümlerine erişim için kullanılan SSH genel (public) anahtarı.
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA2PaeXoo2vFT/S0nIhBJRw+V6gGoXeKu/hWXdN5I9iO k8s_local

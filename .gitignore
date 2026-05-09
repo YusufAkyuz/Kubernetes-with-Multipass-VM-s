@@ -1,0 +1,34 @@
+# Git versiyon kontrol sisteminde takip edilmeyecek dosya ve klasörleri tanımlayan dosya.
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Ansible
+*.retry
+ansible.log
+
+# SSH Keys (Security)
+ssh_keys/k8s_local_key
+# ssh_keys/*.pub  # Public keys are usually safe but often ignored if sensitive
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Project specific
+Access_VM_from_local
+cluster_installation

@@ -1,0 +1,173 @@
+# Kubernetes kümesinin kurulum adımlarını (Containerd, Kubeadm, CNI vb.) otomatize eden Ansible playbook'u.
+---
+- name: 1. Tüm Node'lar için Ortam Hazırlığı ve K8s Kurulumu
+  hosts: kubernetes
+  become: yes
+  tasks:
+    - name: Kendi lokal SSH public key'imi yetkili anahtarlara ekle
+      authorized_key:
+        user: ubuntu
+        state: present
+        key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOftIB2ujU7cfz2FU4jlbvUWaIbewz4nKzbWiiJ13tG1"
+
+    - name: Swap'ı anında kapat
+      command: swapoff -a
+      ignore_errors: yes
+
+    - name: Fstab üzerinden Swap'ı kalıcı olarak kapat
+      replace:
+        path: /etc/fstab
+        regexp: '^([^#].*?\sswap\s+sw\s+.*)$'
+        replace: '# \1'
+
+    - name: Gerekli çekirdek modüllerini yükle (containerd için)
+      copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          overlay
+          br_netfilter
+
+    - name: Modülleri aktifleştir
+      command: modprobe "{{ item }}"
+      loop:
+        - overlay
+        - br_netfilter
+
+    - name: Kubernetes için Sysctl ayarlarını yapılandır
+      sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        state: present
+        sysctl_set: yes
+        reload: yes
+      loop:
+        - { name: 'net.bridge.bridge-nf-call-iptables', value: '1' }
+        - { name: 'net.bridge.bridge-nf-call-ip6tables', value: '1' }
+        - { name: 'net.ipv4.ip_forward', value: '1' }
+
+    - name: Ubuntu arka plan güncellemelerinin (apt lock) bitmesini bekle
+      raw: while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 5; done;
+
+    - name: Gerekli temel paketleri kur
+      apt:
+        name: ['apt-transport-https', 'ca-certificates', 'curl', 'gpg']
+        state: present
+        update_cache: yes
+      retries: 3
+      delay: 10
+      register: apt_result
+      until: apt_result is success
+
+    - name: Docker/Containerd GPG anahtarını ekle
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Docker/Containerd repository ekle
+      apt_repository:
+        repo: deb https://download.docker.com/linux/ubuntu jammy stable
+        state: present
+
+    - name: Containerd'yi kur
+      apt:
+        name: containerd.io
+        state: present
+        update_cache: yes
+
+    - name: Containerd varsayılan yapılandırmasını oluştur
+      shell: containerd config default > /etc/containerd/config.toml
+
+    - name: Containerd için SystemdCgroup'u aktifleştir
+      replace:
+        path: /etc/containerd/config.toml
+        regexp: 'SystemdCgroup = false'
+        replace: 'SystemdCgroup = true'
+
+    - name: Containerd servisini yeniden başlat ve aktifleştir
+      systemd:
+        name: containerd
+        state: restarted
+        enabled: yes
+
+    - name: Kubernetes GPG anahtarını ekle (Modern K8s Repo)
+      apt_key:
+        url: https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key
+        state: present
+
+    - name: Kubernetes repository ekle
+      apt_repository:
+        repo: deb https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /
+        state: present
+
+    - name: Kubelet, Kubeadm ve Kubectl kurulumu
+      apt:
+        name: ['kubelet', 'kubeadm', 'kubectl']
+        state: present
+        update_cache: yes
+
+    - name: K8s paketlerinin sürümünü kilitle (Otomatik güncellemeyi engelle)
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - kubeadm
+        - kubelet
+        - kubectl
+
+- name: 2. Control Plane (Master) Başlatma
+  hosts: master
+  become: yes
+  tasks:
+    - name: Cluster'ın başlatılıp başlatılmadığını kontrol et
+      stat:
+        path: /etc/kubernetes/admin.conf
+      register: kubeadm_check
+
+    - name: Kubeadm Init ile Cluster'ı Başlat (Sadece 1 kere çalışır)
+      command: kubeadm init --pod-network-cidr=10.244.0.0/16
+      when: not kubeadm_check.stat.exists
+
+    - name: Ubuntu kullanıcısı için .kube klasörü oluştur
+      file:
+        path: /home/ubuntu/.kube
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+
+    - name: admin.conf dosyasını kullanıcının profiline kopyala
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/ubuntu/.kube/config
+        remote_src: yes
+        owner: ubuntu
+        group: ubuntu
+        mode: '0644'
+
+    - name: Flannel CNI Ağ Eklentisini Kur (Pod haberleşmesi için)
+      become: false
+      command: kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    - name: Worker'lar için Join komutunu üret
+      command: kubeadm token create --print-join-command
+      register: join_command_raw
+
+    - name: Join komutunu Ansible hafızasına al
+      add_host:
+        name: "K8S_TOKEN_HOLDER"
+        token: "{{ join_command_raw.stdout }}"
+
+- name: 3. Worker Node'ları Cluster'a Dahil Etme
+  hosts: workers
+  become: yes
+  tasks:
+    - name: Worker'ın Cluster'da olup olmadığını kontrol et
+      stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_check
+
+    - name: Join komutunu çalıştır (Cluster'a katıl)
+      command: "{{ hostvars['K8S_TOKEN_HOLDER']['token'] }}"
+      when: not kubelet_check.stat.exists

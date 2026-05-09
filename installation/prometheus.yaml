@@ -2,3 +2,5 @@ helm repo add prometheus-community https://prometheus-community.github.io/helm-c
 helm repo update
 
 helm install prometheus prometheus-community/prometheus --namespace monitoring
+
+kubectl exec -it apisix-ingress-controller-6c7787bbc5-rrpsz -n apisix -- curl http://apisix-admin.apisix.svc.cluster.local:9180/apisix/admin/routes -H 'X-API-KEY: edd1c9f034335f136f87ad84b625c8f1'
